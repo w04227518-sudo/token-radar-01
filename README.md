@@ -1,6 +1,10 @@
 # Token Radar — pre-token protocols ranked by implied value
 
-A token launch radar for make.fun's `token-radar-01` bounty. It reads the sealed
+[![make.fun · token-radar-01](https://make.fun/badge/token-radar-01.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![rank](https://make.fun/badge/token-radar-01/w04227518-sudo/token-radar-01/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![reward](https://make.fun/badge/token-radar-01/w04227518-sudo/token-radar-01/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+
+A token launch radar for [make.fun's `token-radar-01` bounty](https://make.fun/bounty/token-radar-01). It reads the sealed
 DefiLlama snapshot, ranks the protocols that record no token by what a launch would
 be worth, and hands the reader a farm plan for each one.
 
@@ -46,9 +50,7 @@ Node 22 or later, standard library only. Two runs write identical bytes.
 ## Screenshots
 
 The three screenshots (`screenshots/`: board, detail, filtered) are taken in a
-browser from the built dashboard. This build was produced on a machine with no
-browser installed, so they are not shipped yet; add them and re-run before
-submitting.
+browser from the built dashboard.
 
 ## License
 
