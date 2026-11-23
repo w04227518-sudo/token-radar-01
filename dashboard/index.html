@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token Radar — pre-token protocols ranked by implied value</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<a class="skip" href="#board">Skip to the board</a>
+<header class="topbar">
+  <div class="brand"><span class="cursor" aria-hidden="true">▮</span> TOKEN&nbsp;RADAR <span class="dim">/ launch watch</span></div>
+  <div class="topmeta" id="topmeta"></div>
+</header>
+<main id="board" class="shell" aria-busy="true">
+  <section class="hero">
+    <h1>Which launch is worth farming next?</h1>
+    <p id="lede"></p>
+    <div class="stats" id="stats"></div>
+  </section>
+
+  <nav class="tabs" id="tabs" aria-label="Views">
+    <button type="button" data-view="board" aria-pressed="true">Board</button>
+    <button type="button" data-view="live" aria-pressed="false">Live tokens</button>
+    <button type="button" data-view="model" aria-pressed="false">Model &amp; comps</button>
+  </nav>
+
+  <section id="view-board">
+    <div class="controls" id="controls"></div>
+    <div class="sandbox" id="sandbox"></div>
+    <div class="panel"><div class="table-wrap" id="tablewrap"></div></div>
+    <p class="note" id="boardnote"></p>
+  </section>
+
+  <section id="view-live" hidden>
+    <p class="note">These protocols already trade. Their market cap is a fact from the snapshot, not a model — so they are set aside from the ranking, and shown here so the reader can check what the market pays for a token that exists.</p>
+    <div class="panel"><div class="table-wrap" id="livetable"></div></div>
+  </section>
+
+  <section id="view-model" hidden>
+    <div class="panel pad" id="modelpanel"></div>
+    <div class="panel pad" id="compspanel"></div>
+  </section>
+</main>
+<dialog class="detail" id="detail" aria-labelledby="detail-title"></dialog>
+<script src="../data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
