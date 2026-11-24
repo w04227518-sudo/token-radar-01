@@ -49,8 +49,8 @@ Node 22 or later, standard library only. Two runs write identical bytes.
 
 ## Screenshots
 
-The three screenshots (`screenshots/`: board, detail, filtered) are taken in a
-browser from the built dashboard.
+Four screenshots (`screenshots/`): board, detail, filtered, and the model &
+comps view, taken in a browser from the built dashboard.
 
 ## License
 
