@@ -99,7 +99,8 @@ if (shots.length >= 3) {
 
 process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside)\n` +
-    `token radar: global comps median ${radar.global_median}, ${radar.comps.length} categories in the comps table\n` +
+    `token radar: fitted model ${radar.model_version}: ${radar.validation.terms.filter((t) => t.kept).map((t) => t.name).join(', ')} kept, LOO x${radar.validation.loo_multiple} (${radar.validation.loo_n} comps), walk-forward x${radar.validation.walk_forward_multiple}\n` +
+    `token radar: coverage ${radar.coverage.ranked} ranked + ${radar.coverage.live} live + ${radar.coverage.excluded_cex + radar.coverage.excluded_versioned + radar.coverage.excluded_wrapped + radar.coverage.excluded_chain_bridge} set aside = ${radar.coverage.total} accounted for\n` +
     `token radar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (${dash.length} files), ${join(out, 'screenshots')} (${shots.length} images)` +
     (dossier ? ` and ${join(out, 'dossier.json')}\n` : ' (no dossier: screenshots missing)\n'),
 );
