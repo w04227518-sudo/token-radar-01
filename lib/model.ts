@@ -1,5 +1,12 @@
-// Token Radar's value model v3: fitted from the snapshot, validated held-out,
+// Token Radar's value model v4: fitted from the snapshot, validated held-out,
 // with launch odds from the peers' own record.
+//
+// v4 changes two things against v3, both measured on the same held-out tests:
+// the comps leave out exchanges and bridges (their market-cap / TVL ratios
+// measure a different business — see compsList), and the validation reports
+// the typical held-out error (the median absolute error) beside the RMSE
+// multiple, because a few protocols sit orders of magnitude off their peers
+// and the RMSE multiple is mostly their story.
 //
 // The model is fitted at runtime on the live-token comps: protocols that
 // record a token with a market cap above zero and TVL above zero. It fits
@@ -57,7 +64,7 @@ export const MODEL: ModelConstants = {
   unknown_age_days: 365,
 };
 
-export const MODEL_VERSION = 'radar-fitted-1';
+export const MODEL_VERSION = 'radar-fitted-2';
 
 /** Candidate value terms, in the order the fit tries them. */
 export const TERM_NAMES = ['log_tvl', 'growth', 'log_age', 'chains', 'log_catmed'] as const;
@@ -96,9 +103,17 @@ export interface Validation {
   loo_rmse: number;
   loo_multiple: number;
   loo_n: number;
+  /** Typical leave-one-out error: the median absolute held-out residual, as
+   *  a multiple — the error a coin-flip comp actually sees, where the RMSE
+   *  multiple is set by a few protocols orders of magnitude off their peers. */
+  loo_typical_multiple: number;
   walk_forward_multiple: number;
   walk_forward_n: number;
+  /** Typical walk-forward error, median absolute, as a multiple. */
+  walk_forward_typical_multiple: number;
   walk_forward_reverse_multiple: number;
+  /** Typical reverse walk-forward error, median absolute, as a multiple. */
+  walk_forward_reverse_typical_multiple: number;
   interval_factor: number;
   clamp_lo: number;
   clamp_hi: number;
@@ -358,11 +373,25 @@ export function exclusionReason(p: SnapshotProtocol, snapshot: Snapshot): string
   return null;
 }
 
-/** The comps: live-token protocols with a positive market cap and TVL. Dead
- *  tokens (a market cap of zero or less) are not comps: they record no price
- *  the market pays. */
+/** Categories whose market-cap / TVL ratio measures a different business and
+ *  so never set the board's prices. An exchange's token prices its whole
+ *  exchange business, not the TVL on its DeFi product; a bridge's TVL is
+ *  assets in transit, not value the bridge captures — their ratios run from
+ *  0.00025x to 69x while the other live-token protocols sit between 0.0065x
+ *  and 12x, so keeping them in the comps would price every row off businesses
+ *  the board does not rank. The rule is over categories, never names: any
+ *  protocol in one of these categories is out of the comps, whatever its slug.
+ *  The board still ranks pre-token bridges (on the global multiple); only the
+ *  fit leaves them out. */
+export const NON_COMP_CATEGORIES = new Set(['CEX', 'Bridge', 'Canonical Bridge', 'Cross Chain Bridge']);
+
+/** The comps: live-token protocols with a positive market cap and TVL, outside
+ *  the non-comp categories. Dead tokens (a market cap of zero or less) are not
+ *  comps: they record no price the market pays. */
 export function compsList(snapshot: Snapshot): SnapshotProtocol[] {
-  return snapshot.protocols.filter((p) => !isPreToken(p) && p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0);
+  return snapshot.protocols.filter(
+    (p) => !isPreToken(p) && p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0 && !NON_COMP_CATEGORIES.has(p.category ?? ''),
+  );
 }
 
 /** The comps table: for every category, the median mcap/TVL of its live-token
@@ -422,9 +451,12 @@ export interface FittedModel {
   looMultiple: number;
   looRmse: number;
   looN: number;
+  looTypicalMultiple: number;
   walkForwardMultiple: number;
   walkForwardN: number;
+  walkForwardTypicalMultiple: number;
   walkForwardReverseMultiple: number;
+  walkForwardReverseTypicalMultiple: number;
   intervalFactor: number;
   clampLo: number;
   clampHi: number;
@@ -467,17 +499,24 @@ export function fitModel(snapshot: Snapshot, model: ModelConstants = MODEL): Fit
   const cut = dated.length > 0 ? dated[Math.floor(dated.length / 2)]!.age : 0;
   const older = dated.filter((d) => d.age >= cut).map((d) => d.i);
   const newer = dated.filter((d) => d.age < cut).map((d) => d.i);
-  const wf = (train: number[], test: number[]): number => {
-    if (train.length < 5 || test.length < 5) return NaN;
+  const wf = (train: number[], test: number[]): { rmse: number; median: number } => {
+    if (train.length < 5 || test.length < 5) return { rmse: NaN, median: NaN };
     const b = ols(train.map((i) => xRows[i]!), train.map((i) => y[i]!));
-    return rmse(test.map((i) => y[i]!), test.map((i) => {
+    const errs = test.map((i) => {
+      let s = 0;
+      for (let c = 0; c < b.length; c++) s += b[c]! * xRows[i]![c]!;
+      return Math.abs(y[i]! - s);
+    });
+    return { rmse: rmse(test.map((i) => y[i]!), test.map((i) => {
       let s = 0;
       for (let c = 0; c < b.length; c++) s += b[c]! * xRows[i]![c]!;
       return s;
-    }));
+    })), median: median(errs) };
   };
-  const wfMultiple = 10 ** wf(older, newer);
-  const wfReverseMultiple = 10 ** wf(newer, older);
+  const wfForward = wf(older, newer);
+  const wfReverse = wf(newer, older);
+  const wfMultiple = 10 ** wfForward.rmse;
+  const wfReverseMultiple = 10 ** wfReverse.rmse;
   // Conformal-style interval from the held-out residuals of the final model.
   const looResiduals: number[] = [];
   for (let i = 0; i < y.length; i++) {
@@ -498,9 +537,12 @@ export function fitModel(snapshot: Snapshot, model: ModelConstants = MODEL): Fit
     looMultiple: round4(10 ** looFinal),
     looRmse: round4(looFinal),
     looN: y.length,
+    looTypicalMultiple: round4(10 ** median(looResiduals)),
     walkForwardMultiple: round4(wfMultiple),
     walkForwardN: newer.length,
+    walkForwardTypicalMultiple: round4(10 ** wfForward.median),
     walkForwardReverseMultiple: round4(wfReverseMultiple),
+    walkForwardReverseTypicalMultiple: round4(10 ** wfReverse.median),
     intervalFactor: round4(intervalFactor),
     clampLo: round4(clampLo),
     clampHi: round4(clampHi),
@@ -868,9 +910,12 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     loo_rmse: fitted.looRmse,
     loo_multiple: fitted.looMultiple,
     loo_n: fitted.looN,
+    loo_typical_multiple: fitted.looTypicalMultiple,
     walk_forward_multiple: fitted.walkForwardMultiple,
     walk_forward_n: fitted.walkForwardN,
+    walk_forward_typical_multiple: fitted.walkForwardTypicalMultiple,
     walk_forward_reverse_multiple: fitted.walkForwardReverseMultiple,
+    walk_forward_reverse_typical_multiple: fitted.walkForwardReverseTypicalMultiple,
     interval_factor: fitted.intervalFactor,
     clamp_lo: fitted.clampLo,
     clamp_hi: fitted.clampHi,
@@ -883,12 +928,14 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     ],
     odds_overall_share: round4(odds.overallShare),
   };
+  const liveTokenWithMcap = snapshot.protocols.filter((p) => !isPreToken(p) && p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0).length;
   const checks = [
     `watchlist ${snapshot.watchlist.length}/${snapshot.watchlist.length} covered`,
     `ranks exactly 1..${board.length}`,
     `implied values non-increasing, ${new Set(board.map((r) => r.implied_value_usd)).size} distinct`,
     `farm plan on every row (${board[0]?.farm_steps.length ?? 0} steps each)`,
     `all ${snapshot.protocols.length} snapshot protocols accounted for: ${board.length} ranked, ${live.length} live, ${excluded.cex + excluded.versioned + excluded.wrapped + excluded.chainBridge} set aside with reasons`,
+    `value comps exclude exchanges and bridges (${compsList(snapshot).length} of ${liveTokenWithMcap} live-token protocols set the multiples): their market-cap / TVL ratios measure a different business`,
     `no protocol name is special-cased; every multiple, coefficient and odds figure is fitted from this snapshot`,
   ];
   const radar: RadarData = {

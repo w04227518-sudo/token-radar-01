@@ -155,8 +155,8 @@
     var kept = v.terms.filter(function (t) { return t.kept; }).map(function (t) { return t.name; }).join(', ');
     var items = [
       [String(c.ranked) + ' + ' + String(c.live) + ' + ' + String(c.excluded_cex + c.excluded_versioned + c.excluded_wrapped + c.excluded_chain_bridge), 'of ' + String(c.total) + ' protocols accounted for'],
-      ['x' + v.loo_multiple, 'leave-one-out error, ' + v.loo_n + ' comps'],
-      ['x' + v.walk_forward_multiple, 'walk-forward error, ' + v.walk_forward_n + ' newer listings'],
+      ['x' + v.loo_multiple + (v.loo_typical_multiple !== undefined ? ' (typical x' + v.loo_typical_multiple + ')' : ''), 'leave-one-out error, ' + v.loo_n + ' comps'],
+      ['x' + v.walk_forward_multiple + (v.walk_forward_typical_multiple !== undefined ? ' (typical x' + v.walk_forward_typical_multiple + ')' : ''), 'walk-forward error, ' + v.walk_forward_n + ' newer listings'],
       ['x' + v.interval_factor, '90% interval factor'],
       [kept, 'terms kept by held-out tests'],
       [fmtUsd(top ? top.v : 0), 'top implied value']
@@ -396,6 +396,8 @@
       tBody
     )));
     mp.appendChild(el('p', { text: 'Held-out validation, computed at runtime from this snapshot: leave-one-out error x' + v.loo_multiple + ' (RMSE ' + v.loo_rmse + ' in log10, ' + v.loo_n + ' comps), walk-forward error x' + v.walk_forward_multiple + ' (fit on the ' + v.walk_forward_n + ' older listings, scored on the newer ones), reverse walk-forward x' + v.walk_forward_reverse_multiple + '. The 90% interval on each implied value is x' + v.interval_factor + ', the 90th percentile of the leave-one-out residuals — honestly wide, because market multiples span four orders of magnitude.' }));
+    mp.appendChild(el('p', { text: 'The typical held-out error — the median absolute error, the error a coin-flip protocol actually sees — is x' + v.loo_typical_multiple + ' leave-one-out, x' + v.walk_forward_typical_multiple + ' walk-forward and x' + v.walk_forward_reverse_typical_multiple + ' reverse walk-forward. The RMSE multiples above are pulled up by a few protocols whose multiples sit orders of magnitude off their peers; the median says what the model usually gets wrong.' }));
+    mp.appendChild(el('p', { text: 'The comps leave out exchanges and bridges: an exchange\u2019s token prices its whole exchange business, not the TVL on its DeFi product, and a bridge\u2019s TVL is assets in transit, not value captured. Their market-cap / TVL ratios run from 0.00025x to 69x — nearly six orders of magnitude — so they would set the board\u2019s prices from businesses the board does not rank. The ' + v.comps_n + ' comps are the live-token protocols outside those four categories; the rule is over categories, never names, and pre-token bridges are still ranked, on the global median.' }));
     mp.appendChild(el('p', { text: 'The category median behind each row is shrunk toward the global median x' + fmtMult(DATA.global_median) + ' by weight n / (n + ' + m.shrinkage_k + '), so a category with one comp cannot set the board. No protocol name is special-cased, and no row is hand-picked.' }));
     // Launch odds: the fitted curve, and what it says at each age.
     var oc = {};

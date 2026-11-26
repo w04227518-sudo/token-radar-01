@@ -8,32 +8,45 @@ A token launch radar for [make.fun's `token-radar-01` bounty](https://make.fun/b
 DefiLlama snapshot, ranks the protocols that record no token by what a launch would
 be worth, and hands the reader a farm plan for each one.
 
-## The model (radar-fitted-1)
+## The model (radar-fitted-2)
 
-A log-linear fit on the 128 live-token protocols that record a market cap and
-TVL. The target is log10(market cap / TVL) — what the market pays for one
-dollar of TVL. Every term was kept or dropped on held-out tests, not on
-in-sample fit:
+A log-linear fit on the 101 live-token protocols that record a market cap and
+TVL and are not exchanges or bridges. The target is log10(market cap / TVL) —
+what the market pays for one dollar of TVL. Every term was kept or dropped on
+held-out tests, not on in-sample fit:
 
 ```
-log10(mcap / TVL) = 2.3097 - 0.2880 x log10(TVL) + 1.1435 x log10(category median)
-implied = round( TVL x 10^log10(mcap / TVL) ), clamped to x0.0065 – x12.1602
+log10(mcap / TVL) = 2.5330 - 0.2932 x log10(TVL) + 1.4092 x log10(category median)
+implied = round( TVL x 10^log10(mcap / TVL) ), clamped to x0.0080 – x5.1301
 ```
 
 The category median is the median market-cap / TVL of that category's
-live-token protocols, shrunk toward the global median (x0.2138 on this
+live-token protocols, shrunk toward the global median (x0.2042 on this
 snapshot) by weight n / (n + 2), so a category with one comp cannot set the
 board. Held-out validation, computed at runtime from this snapshot:
-leave-one-out error **x6.8139** (RMSE 0.8334 in log10, 128 comps),
-walk-forward error **x6.0746** (fit on the older listings, scored on the 47
-newer ones), reverse walk-forward x6.9601. The 90% interval on each implied
-value is x26.3786, the 90th percentile of the leave-one-out residuals —
-honestly wide, because market multiples span four orders of magnitude.
+leave-one-out error **x5.5765** (RMSE 0.7464 in log10, 101 comps),
+walk-forward error **x5.2189** (fit on the older listings, scored on the 38
+newer ones), reverse walk-forward x4.5683. The typical held-out error — the
+median absolute error, the error a coin-flip protocol actually sees — is
+x2.5722 leave-one-out and x2.1895 walk-forward: the RMSE multiples above are
+pulled up by a few protocols whose multiples sit orders of magnitude off
+their peers. The 90% interval on each implied value is x17.1784, the 90th
+percentile of the leave-one-out residuals — honestly wide, because market
+multiples span four orders of magnitude.
 
-Term selection by leave-one-out error (full model x7.0667): **log_tvl kept**
-(without it x7.5084) and **log_catmed kept** (without it x8.5927); **growth
-dropped** (without it x7.0148), **log_age dropped** (x6.9363) and **chains
-dropped** (x6.9759) — each of the three made held-out error worse when kept.
+Term selection by leave-one-out error (full model x5.8998): **log_tvl kept**
+(without it x6.2076) and **log_catmed kept** (without it x8.0821); **growth
+dropped** (without it x5.7611), **log_age dropped** (x5.7475) and **chains
+dropped** (x5.8193) — each of the three made held-out error worse when kept.
+
+The comps leave out exchanges and bridges: an exchange's token prices its
+whole exchange business, not the TVL on its DeFi product, and a bridge's TVL
+is assets in transit, not value captured. Their market-cap / TVL ratios run
+from 0.00025x to 69x — nearly six orders of magnitude — so they would set
+the board's prices from businesses the board does not rank. The 101 comps
+are the live-token protocols outside those four categories; the rule is over
+categories, never names, and pre-token bridges are still ranked, on the
+global median.
 
 Launch odds come from a logistic fit on every protocol with a listing date:
 launched (1) or not (0), on log age and the category's launched share (shrunk
@@ -50,9 +63,9 @@ The board holds 261 rows: every pre-token protocol the snapshot holds, except
 assets, and 20 bridges a chain or an exchange runs itself. All 758 snapshot
 protocols are accounted for: 261 ranked + 416 live-token protocols shown in
 their own view + 81 set aside. All 40 watchlist slugs are covered. Top of the
-board on this snapshot: Polymarket $702.6M (odds 31%), Sentora $502.4M (22%),
-Steakhouse Financial $502.0M (21%), Gauntlet $337.6M (21%), CCIP $309.4M
-(57%). No protocol name is special-cased, and no value is hardcoded: every
+board on this snapshot: Polymarket $1,314.3M (odds 31%), Sentora $602.0M (22%),
+Steakhouse Financial $601.5M (21%), Gauntlet $405.7M (21%), nonce-capital
+$183.6M (25%). No protocol name is special-cased, and no value is hardcoded: every
 coefficient, multiple and odds figure is fitted from the snapshot at runtime.
 
 ## The dashboard
