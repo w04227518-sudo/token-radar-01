@@ -157,7 +157,8 @@
       [String(c.ranked) + ' + ' + String(c.live) + ' + ' + String(c.excluded_cex + c.excluded_versioned + c.excluded_wrapped + c.excluded_chain_bridge), 'of ' + String(c.total) + ' protocols accounted for'],
       ['x' + v.loo_multiple + (v.loo_typical_multiple !== undefined ? ' (typical x' + v.loo_typical_multiple + ')' : ''), 'leave-one-out error, ' + v.loo_n + ' comps'],
       ['x' + v.walk_forward_multiple + (v.walk_forward_typical_multiple !== undefined ? ' (typical x' + v.walk_forward_typical_multiple + ')' : ''), 'walk-forward error, ' + v.walk_forward_n + ' newer listings'],
-      ['x' + v.interval_factor, '90% interval factor'],
+      ['x' + v.interval_factor + ' as-fitted', '90% interval, single factor'],
+      [v.interval_bands.map(function (b) { return b.band + ' x' + b.factor + (b.fallback ? '*' : ''); }).join('  '), '90% interval by TVL band, honest (* global fallback)'],
       [kept, 'terms kept by held-out tests'],
       [fmtUsd(top ? top.v : 0), 'top implied value']
     ];
@@ -395,8 +396,26 @@
       el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Term' }), el('th', { scope: 'col', text: 'Decision' }), el('th', { scope: 'col', text: 'LOO with term' }), el('th', { scope: 'col', text: 'LOO without term' }))),
       tBody
     )));
-    mp.appendChild(el('p', { text: 'Held-out validation, computed at runtime from this snapshot: leave-one-out error x' + v.loo_multiple + ' (RMSE ' + v.loo_rmse + ' in log10, ' + v.loo_n + ' comps), walk-forward error x' + v.walk_forward_multiple + ' (fit on the ' + v.walk_forward_n + ' older listings, scored on the newer ones), reverse walk-forward x' + v.walk_forward_reverse_multiple + '. The 90% interval on each implied value is x' + v.interval_factor + ', the 90th percentile of the leave-one-out residuals — honestly wide, because market multiples span four orders of magnitude.' }));
-    mp.appendChild(el('p', { text: 'The typical held-out error — the median absolute error, the error a coin-flip protocol actually sees — is x' + v.loo_typical_multiple + ' leave-one-out, x' + v.walk_forward_typical_multiple + ' walk-forward and x' + v.walk_forward_reverse_typical_multiple + ' reverse walk-forward. The RMSE multiples above are pulled up by a few protocols whose multiples sit orders of magnitude off their peers; the median says what the model usually gets wrong.' }));
+    mp.appendChild(el('p', { text: 'Held-out validation, computed at runtime from this snapshot. As-fitted builds the category table once on all ' + v.loo_n + ' comps, so a held-out protocol\u2019s own ratio leaks into its prediction; honest rebuilds the table inside every fold and every split, so nothing leaks — and the honest numbers are worse for it. Both are printed, labelled, so this entry can be compared with any claimed error on the same footing.' }));
+    var vBody = el('tbody');
+    [
+      ['Leave-one-out', v.loo_multiple, v.loo_mae_multiple, v.loo_typical_multiple, v.honest_loo_multiple, v.honest_loo_mae_multiple, v.honest_loo_typical_multiple],
+      ['Walk-forward', v.walk_forward_multiple, v.walk_forward_mae_multiple, v.walk_forward_typical_multiple, v.honest_walk_forward_multiple, v.honest_walk_forward_mae_multiple, v.honest_walk_forward_typical_multiple],
+      ['Reverse walk-forward', v.walk_forward_reverse_multiple, v.walk_forward_reverse_mae_multiple, v.walk_forward_reverse_typical_multiple, v.honest_walk_forward_reverse_multiple, v.honest_walk_forward_reverse_mae_multiple, v.honest_walk_forward_reverse_typical_multiple]
+    ].forEach(function (r) {
+      var cells = [el('td', { text: r[0] })];
+      for (var i = 1; i < r.length; i++) cells.push(el('td', { class: 'num', text: 'x' + r[i] }));
+      vBody.appendChild(el('tr', null, cells));
+    });
+    mp.appendChild(el('div', { class: 'compstable' }, el('table', null,
+      el('caption', { text: 'Held-out error as a multiple (10^error in log10), ' + v.loo_n + ' comps. RMSE is pulled up by a few protocols orders of magnitude off their peers; MAE and median say what the model usually gets wrong.' }),
+      el('thead', null,
+        el('tr', null, el('th', { scope: 'col', text: 'Test' }), el('th', { scope: 'col', colspan: '3', text: 'As-fitted' }), el('th', { scope: 'col', colspan: '3', text: 'Honest' })),
+        el('tr', null, el('th', { scope: 'col', text: '' }), el('th', { scope: 'col', text: 'RMSE' }), el('th', { scope: 'col', text: 'MAE' }), el('th', { scope: 'col', text: 'Median' }), el('th', { scope: 'col', text: 'RMSE' }), el('th', { scope: 'col', text: 'MAE' }), el('th', { scope: 'col', text: 'Median' }))
+      ),
+      vBody
+    )));
+    mp.appendChild(el('p', { text: 'The 90% interval on each implied value is priced per TVL band from the honest leave-one-out residuals: ' + v.interval_bands.map(function (b) { return b.band + ' x' + b.factor + ' (' + b.n + ' comps' + (b.fallback ? ', global fallback' : '') + ')'; }).join(', ') + '. The old single factor was x' + v.interval_factor + ' as-fitted (x' + v.interval_factor_honest + ' honest); one factor overstates the range on the big rows and understates it on the small ones, because market multiples span four orders of magnitude and small protocols are noisier.' }));
     mp.appendChild(el('p', { text: 'The comps leave out exchanges and bridges: an exchange\u2019s token prices its whole exchange business, not the TVL on its DeFi product, and a bridge\u2019s TVL is assets in transit, not value captured. Their market-cap / TVL ratios run from 0.00025x to 69x — nearly six orders of magnitude — so they would set the board\u2019s prices from businesses the board does not rank. The ' + v.comps_n + ' comps are the live-token protocols outside those four categories; the rule is over categories, never names, and pre-token bridges are still ranked, on the global median.' }));
     mp.appendChild(el('p', { text: 'The category median behind each row is shrunk toward the global median x' + fmtMult(DATA.global_median) + ' by weight n / (n + ' + m.shrinkage_k + '), so a category with one comp cannot set the board. No protocol name is special-cased, and no row is hand-picked.' }));
     // Launch odds: the fitted curve, and what it says at each age.
@@ -476,7 +495,7 @@
         el('div', null, el('span', { text: 'Age with no token issued' }), el('b', { class: 'num', text: fmtAge(m.age_days) })),
         el('div', null, el('span', { text: 'Seven-day growth' }), el('b', { class: 'num', text: fmtPct(row.change_7d) })),
         el('div', { class: 'total' }, el('span', { text: 'Implied value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) })),
-        el('div', null, el('span', { text: '90% range' }), el('b', { class: 'num', text: fmtUsd(row.implied_lo_usd) + ' – ' + fmtUsd(row.implied_hi_usd) }))
+        el('div', null, el('span', { text: '90% range (' + m.interval_band + ' band, x' + m.interval_factor + ')' }), el('b', { class: 'num', text: fmtUsd(row.implied_lo_usd) + ' – ' + fmtUsd(row.implied_hi_usd) }))
       ),
       el('p', { class: 'sub', text: catLine + '. The page recomputes this row as ' + fmtUsd(impliedOf(row, { scale: 1 })) + ' — the same number board.json carries. This is an estimate, not a price.' })
     ));
@@ -485,7 +504,7 @@
       el('div', { class: 'equation' },
         el('div', null, el('span', { text: 'Launch odds, next ' + Math.round(DATA.validation.odds_horizon_days / 365) + ' years' }), el('b', { class: 'num', text: (row.launch_odds * 100).toFixed(1) + '%' })),
         el('div', null, el('span', { text: 'Expected value (implied x odds)' }), el('b', { class: 'num', text: fmtUsd(Math.round(row.implied_value_usd * row.launch_odds)) })),
-        el('div', { class: 'total' }, el('span', { text: 'Verdict' }), el('b', { class: 'num', text: row.farm_verdict + ' — farm cost about $' + row.farm_cost_usd }))
+        el('div', { class: 'total' }, el('span', { text: 'Verdict' }), el('b', { class: 'num', text: row.farm_verdict + ' — farm cost about $' + row.farm_cost_usd + ' (~$' + row.farm_cost_per_hour_usd + ' per active hour)' }))
       ),
       el('p', { class: 'sub', text: 'Odds come from a logistic fit on the peers\u2019 record (log age and the category\u2019s launched share); they fall with age, so an old protocol can rank high on value and still be a Watch. The verdict is Farm when both implied value and odds sit above their board medians, Watch when one does, Skip when neither does.' })
     ));

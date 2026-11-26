@@ -107,6 +107,10 @@ export interface Validation {
    *  a multiple — the error a coin-flip comp actually sees, where the RMSE
    *  multiple is set by a few protocols orders of magnitude off their peers. */
   loo_typical_multiple: number;
+  /** As-fitted mean-absolute-error multiples (table built once). */
+  loo_mae_multiple: number;
+  walk_forward_mae_multiple: number;
+  walk_forward_reverse_mae_multiple: number;
   walk_forward_multiple: number;
   walk_forward_n: number;
   /** Typical walk-forward error, median absolute, as a multiple. */
@@ -115,6 +119,23 @@ export interface Validation {
   /** Typical reverse walk-forward error, median absolute, as a multiple. */
   walk_forward_reverse_typical_multiple: number;
   interval_factor: number;
+  /** Honest multiples: the category table rebuilt inside every fold/split.
+   *  As-fitted numbers above build the table once on all comps, so a
+   *  held-out protocol's own ratio leaks into its prediction; the honest
+   *  numbers do not, and are worse for it. Both are printed, labelled. */
+  honest_loo_multiple: number;
+  honest_loo_mae_multiple: number;
+  honest_loo_typical_multiple: number;
+  honest_walk_forward_multiple: number;
+  honest_walk_forward_mae_multiple: number;
+  honest_walk_forward_typical_multiple: number;
+  honest_walk_forward_reverse_multiple: number;
+  honest_walk_forward_reverse_mae_multiple: number;
+  honest_walk_forward_reverse_typical_multiple: number;
+  /** Honest global 90% interval factor (q90 of the honest LOO residuals). */
+  interval_factor_honest: number;
+  /** Per-TVL-band 90% interval factors from the honest LOO residuals. */
+  interval_bands: IntervalBand[];
   clamp_lo: number;
   clamp_hi: number;
   median_age_days: number;
@@ -145,6 +166,9 @@ export interface ModelBreakdown {
   clamped: boolean;
   age_days: number | null;
   growth_pct: number;
+  /** The TVL band that prices this row's 90% range, and its factor. */
+  interval_band: string;
+  interval_factor: number;
 }
 
 export interface BoardRow {
@@ -167,6 +191,9 @@ export interface BoardRow {
   launch_odds: number;
   farm_verdict: 'Farm' | 'Watch' | 'Skip';
   farm_cost_usd: number;
+  /** Farm cost per active hour of the plan (setup, weekly actions, claim
+   *  check, log) — the holding days are passive, not worked hours. */
+  farm_cost_per_hour_usd: number;
   model: ModelBreakdown;
   farm_steps: string[];
 }
@@ -188,6 +215,7 @@ export interface RadarRow {
   launch_odds: number;
   farm_verdict: 'Farm' | 'Watch' | 'Skip';
   farm_cost_usd: number;
+  farm_cost_per_hour_usd: number;
   watchlist: boolean;
   model: ModelBreakdown;
   farm_steps: string[];
@@ -394,11 +422,11 @@ export function compsList(snapshot: Snapshot): SnapshotProtocol[] {
   );
 }
 
-/** The comps table: for every category, the median mcap/TVL of its live-token
- *  protocols, shrunk toward the global median by weight n / (n + k), plus the
- *  global median every empty category falls back to. */
-export function compsTable(snapshot: Snapshot, model: ModelConstants = MODEL): { global: number; byCategory: Map<string, CompEntry> } {
-  const live = compsList(snapshot);
+/** The comps table from an explicit comp list: for every category, the median
+ *  mcap/TVL of its live-token protocols, shrunk toward the global median by
+ *  weight n / (n + k), plus the global median every empty category falls
+ *  back to. */
+export function tableFromComps(live: SnapshotProtocol[], model: ModelConstants = MODEL): { global: number; byCategory: Map<string, CompEntry> } {
   const ratios = live.map((p) => p.mcap_usd! / p.tvl_usd);
   const global = median(ratios);
   const byCat = new Map<string, number[]>();
@@ -416,6 +444,13 @@ export function compsTable(snapshot: Snapshot, model: ModelConstants = MODEL): {
     byCategory.set(category, { category, comps: rs.length, median: round4(med), used: round4(used), source: rs.length > 0 ? 'category' : 'global' });
   }
   return { global, byCategory };
+}
+
+/** The comps table: for every category, the median mcap/TVL of its live-token
+ *  protocols, shrunk toward the global median by weight n / (n + k), plus the
+ *  global median every empty category falls back to. */
+export function compsTable(snapshot: Snapshot, model: ModelConstants = MODEL): { global: number; byCategory: Map<string, CompEntry> } {
+  return tableFromComps(compsList(snapshot), model);
 }
 
 /** The shrunk category multiple one protocol gets, or the global median when
@@ -443,6 +478,121 @@ function termValue(name: TermName, p: SnapshotProtocol, asOf: string, comps: { g
   }
 }
 
+/** The TVL bands the 90% interval is priced per: small protocols are noisier
+ *  than large ones, so one global factor overstates the range on the big rows
+ *  and understates it on the small ones. */
+export interface IntervalBandDef {
+  band: string;
+  lo: number;
+  hi: number | null;
+}
+export const INTERVAL_BAND_DEFS: IntervalBandDef[] = [
+  { band: '<$100M', lo: 0, hi: 100_000_000 },
+  { band: '$100M–$2B', lo: 100_000_000, hi: 2_000_000_000 },
+  { band: '>$2B', lo: 2_000_000_000, hi: null },
+];
+
+/** The TVL band a protocol's TVL falls in. */
+export function bandForTvl(tvl: number): IntervalBandDef {
+  for (const def of INTERVAL_BAND_DEFS) if (tvl >= def.lo && (def.hi === null || tvl < def.hi)) return def;
+  return INTERVAL_BAND_DEFS[INTERVAL_BAND_DEFS.length - 1]!;
+}
+
+/** One 90% interval factor, priced per TVL band from honest held-out
+ *  residuals: how many comps set it, and whether it fell back to the global
+ *  honest factor because the band holds too few comps to be stable. */
+export interface IntervalBand {
+  band: string;
+  n: number;
+  factor: number;
+  fallback: boolean;
+}
+
+/** One held-out error set, as multiples: RMSE, mean absolute, median absolute. */
+function errorMultiples(errs: number[]): { rmse: number; mae: number; median: number } {
+  const abs = errs.map((e) => Math.abs(e));
+  return {
+    rmse: round4(10 ** rmse(new Array<number>(errs.length).fill(0), errs)),
+    mae: round4(10 ** (abs.reduce((s, a) => s + a, 0) / abs.length)),
+    median: round4(10 ** median(abs)),
+  };
+}
+
+/** Design rows for a comp list under one comps table, kept terms only. */
+function designRows(list: SnapshotProtocol[], table: { global: number; byCategory: Map<string, CompEntry> }, kept: TermName[], asOf: string, model: ModelConstants): { xRows: number[][]; y: number[] } {
+  return {
+    xRows: list.map((p) => [1, ...kept.map((t) => termValue(t, p, asOf, table, model))]),
+    y: list.map((p) => Math.log10(p.mcap_usd! / p.tvl_usd)),
+  };
+}
+
+/** The fitted log-ratio for one protocol under one table and one fit. */
+function predictRow(p: SnapshotProtocol, table: { global: number; byCategory: Map<string, CompEntry> }, beta: number[], kept: TermName[], asOf: string, model: ModelConstants): number {
+  let s = beta[0]!;
+  kept.forEach((t, i) => {
+    s += beta[i + 1]! * termValue(t, p, asOf, table, model);
+  });
+  return s;
+}
+
+/**
+ * Honest leave-one-out errors: the category table is rebuilt from the n−1
+ * training comps inside every fold, so the held-out protocol's own ratio
+ * never leaks into its prediction. The kept terms are the model's own; the
+ * fit is re-run per fold. Returns the signed residuals and each held-out
+ * protocol's TVL, for the per-band intervals.
+ */
+function honestLoo(comps: SnapshotProtocol[], snapshot: Snapshot, kept: TermName[], model: ModelConstants): { errs: number[]; tvls: number[] } {
+  const errs: number[] = [];
+  const tvls: number[] = [];
+  for (let i = 0; i < comps.length; i++) {
+    const train = comps.filter((_, j) => j !== i);
+    const table = tableFromComps(train, model);
+    const { xRows, y } = designRows(train, table, kept, snapshot.as_of, model);
+    const beta = ols(xRows, y);
+    const held = comps[i]!;
+    errs.push(Math.log10(held.mcap_usd! / held.tvl_usd) - predictRow(held, table, beta, kept, snapshot.as_of, model));
+    tvls.push(held.tvl_usd);
+  }
+  return { errs, tvls };
+}
+
+/**
+ * Honest walk-forward errors: the split is the same median-age cut the
+ * as-fitted test uses, but the category table is built from the training
+ * half only, so the scored half's ratios never leak into the fit.
+ */
+function honestWalkForward(comps: SnapshotProtocol[], snapshot: Snapshot, kept: TermName[], model: ModelConstants, reverse: boolean): number[] {
+  const dated = comps.map((p, i) => ({ age: ageDays(snapshot.as_of, p.listed_at), i })).filter((d) => d.age !== null) as { age: number; i: number }[];
+  dated.sort((a, b) => a.age - b.age);
+  const cut = dated.length > 0 ? dated[Math.floor(dated.length / 2)]!.age : 0;
+  const older = dated.filter((d) => d.age >= cut).map((d) => d.i);
+  const newer = dated.filter((d) => d.age < cut).map((d) => d.i);
+  const trainIdx = reverse ? newer : older;
+  const testIdx = reverse ? older : newer;
+  if (trainIdx.length < 5 || testIdx.length < 5) return [];
+  const train = trainIdx.map((i) => comps[i]!);
+  const table = tableFromComps(train, model);
+  const { xRows, y } = designRows(train, table, kept, snapshot.as_of, model);
+  const beta = ols(xRows, y);
+  return testIdx.map((i) => {
+    const p = comps[i]!;
+    return Math.log10(p.mcap_usd! / p.tvl_usd) - predictRow(p, table, beta, kept, snapshot.as_of, model);
+  });
+}
+
+/** Per-band 90% interval factors from the honest LOO residuals. A band with
+ *  fewer than 10 comps falls back to the global honest factor, and says so. */
+function intervalBands(looErrs: number[], looTvls: number[], globalFactor: number): IntervalBand[] {
+  return INTERVAL_BAND_DEFS.map((def) => {
+    const abs = looErrs
+      .filter((_, i) => looTvls[i]! >= def.lo && (def.hi === null || looTvls[i]! < def.hi))
+      .map((e) => Math.abs(e));
+    if (abs.length < 10) return { band: def.band, n: abs.length, factor: globalFactor, fallback: true };
+    return { band: def.band, n: abs.length, factor: round4(10 ** quantile(abs, 0.9)), fallback: false };
+  });
+}
+
 /** The fitted value model: coefficients, which terms the held-out tests kept,
  *  and the validation numbers. Fitted on the comps at runtime. */
 export interface FittedModel {
@@ -452,12 +602,32 @@ export interface FittedModel {
   looRmse: number;
   looN: number;
   looTypicalMultiple: number;
+  /** As-fitted mean-absolute-error multiples (table built once, as the
+   *  dashboard's numbers have always been computed). */
+  looMaeMultiple: number;
+  walkForwardMaeMultiple: number;
+  walkForwardReverseMaeMultiple: number;
   walkForwardMultiple: number;
   walkForwardN: number;
   walkForwardTypicalMultiple: number;
   walkForwardReverseMultiple: number;
   walkForwardReverseTypicalMultiple: number;
   intervalFactor: number;
+  /** Honest multiples: the category table rebuilt inside every fold/split,
+   *  so no held-out ratio leaks into its own prediction. */
+  honestLooMultiple: number;
+  honestLooMaeMultiple: number;
+  honestLooTypicalMultiple: number;
+  honestWalkForwardMultiple: number;
+  honestWalkForwardMaeMultiple: number;
+  honestWalkForwardTypicalMultiple: number;
+  honestWalkForwardReverseMultiple: number;
+  honestWalkForwardReverseMaeMultiple: number;
+  honestWalkForwardReverseTypicalMultiple: number;
+  /** Honest global 90% interval factor (q90 of the honest LOO residuals). */
+  intervalFactorHonest: number;
+  /** Per-TVL-band 90% interval factors from the honest LOO residuals. */
+  intervalBands: IntervalBand[];
   clampLo: number;
   clampHi: number;
 }
@@ -499,8 +669,8 @@ export function fitModel(snapshot: Snapshot, model: ModelConstants = MODEL): Fit
   const cut = dated.length > 0 ? dated[Math.floor(dated.length / 2)]!.age : 0;
   const older = dated.filter((d) => d.age >= cut).map((d) => d.i);
   const newer = dated.filter((d) => d.age < cut).map((d) => d.i);
-  const wf = (train: number[], test: number[]): { rmse: number; median: number } => {
-    if (train.length < 5 || test.length < 5) return { rmse: NaN, median: NaN };
+  const wf = (train: number[], test: number[]): { rmse: number; mae: number; median: number } => {
+    if (train.length < 5 || test.length < 5) return { rmse: NaN, mae: NaN, median: NaN };
     const b = ols(train.map((i) => xRows[i]!), train.map((i) => y[i]!));
     const errs = test.map((i) => {
       let s = 0;
@@ -511,7 +681,7 @@ export function fitModel(snapshot: Snapshot, model: ModelConstants = MODEL): Fit
       let s = 0;
       for (let c = 0; c < b.length; c++) s += b[c]! * xRows[i]![c]!;
       return s;
-    })), median: median(errs) };
+    })), mae: errs.reduce((s, e) => s + e, 0) / errs.length, median: median(errs) };
   };
   const wfForward = wf(older, newer);
   const wfReverse = wf(newer, older);
@@ -531,6 +701,15 @@ export function fitModel(snapshot: Snapshot, model: ModelConstants = MODEL): Fit
   const ratios = comps.map((p) => p.mcap_usd! / p.tvl_usd).sort((a, b) => a - b);
   const clampLo = quantile(ratios, 0.05);
   const clampHi = quantile(ratios, 0.95);
+  // Honest validation: the same tests, but the category table is rebuilt
+  // inside every fold and every split, so a held-out protocol's own ratio
+  // never leaks into its prediction. These are the numbers the dashboard
+  // prints beside the as-fitted ones, labelled honestly.
+  const honest = honestLoo(comps, snapshot, kept, model);
+  const honestLooMult = errorMultiples(honest.errs);
+  const honestWfMult = errorMultiples(honestWalkForward(comps, snapshot, kept, model, false));
+  const honestWfRevMult = errorMultiples(honestWalkForward(comps, snapshot, kept, model, true));
+  const intervalFactorHonest = round4(10 ** quantile(honest.errs.map((e) => Math.abs(e)), 0.9));
   return {
     coefficients,
     terms,
@@ -538,12 +717,26 @@ export function fitModel(snapshot: Snapshot, model: ModelConstants = MODEL): Fit
     looRmse: round4(looFinal),
     looN: y.length,
     looTypicalMultiple: round4(10 ** median(looResiduals)),
+    looMaeMultiple: round4(10 ** (looResiduals.reduce((s, e) => s + e, 0) / looResiduals.length)),
+    walkForwardMaeMultiple: round4(10 ** wfForward.mae),
+    walkForwardReverseMaeMultiple: round4(10 ** wfReverse.mae),
     walkForwardMultiple: round4(wfMultiple),
     walkForwardN: newer.length,
     walkForwardTypicalMultiple: round4(10 ** wfForward.median),
     walkForwardReverseMultiple: round4(wfReverseMultiple),
     walkForwardReverseTypicalMultiple: round4(10 ** wfReverse.median),
     intervalFactor: round4(intervalFactor),
+    honestLooMultiple: honestLooMult.rmse,
+    honestLooMaeMultiple: honestLooMult.mae,
+    honestLooTypicalMultiple: honestLooMult.median,
+    honestWalkForwardMultiple: honestWfMult.rmse,
+    honestWalkForwardMaeMultiple: honestWfMult.mae,
+    honestWalkForwardTypicalMultiple: honestWfMult.median,
+    honestWalkForwardReverseMultiple: honestWfRevMult.rmse,
+    honestWalkForwardReverseMaeMultiple: honestWfRevMult.mae,
+    honestWalkForwardReverseTypicalMultiple: honestWfRevMult.median,
+    intervalFactorHonest,
+    intervalBands: intervalBands(honest.errs, honest.tvls, intervalFactorHonest),
     clampLo: round4(clampLo),
     clampHi: round4(clampHi),
   };
@@ -767,6 +960,23 @@ export function farmCostUsd(p: SnapshotProtocol): number {
   return Math.round((capitalFor(p) + 6 * gasUsdFor(chainOf(p))) * 100) / 100;
 }
 
+/**
+ * The plan's active hours: the minutes the steps actually take — 5 to set
+ * up the wallet, 15 to deposit, 10 a week for one qualifying action each
+ * week of the hold, 10 to check the claim, 5 to log it. The holding days
+ * are passive: the capital sits, nobody works.
+ */
+export function farmHours(p: SnapshotProtocol, age: number | null): number {
+  const weeks = Math.ceil(holdDaysFor(age) / 7);
+  const minutes = 5 + 15 + 10 * weeks + 10 + 5;
+  return Math.round((minutes / 60) * 100) / 100;
+}
+
+/** The plan's cost per active hour: total cost over the hours above. */
+export function farmCostPerHourUsd(p: SnapshotProtocol, age: number | null): number {
+  return Math.round((farmCostUsd(p) / farmHours(p, age)) * 100) / 100;
+}
+
 function bySlug(protocols: SnapshotProtocol[]): Map<string, SnapshotProtocol> {
   return new Map(protocols.map((p) => [p.slug, p]));
 }
@@ -795,9 +1005,15 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     const { multiple, clamped, logTvl, logCatmed } = fittedMultiple(p, snapshot, fitted, table, model);
     const cat = catMultipleFor(p, table);
     const implied = Math.max(1, Math.round(p.tvl_usd * multiple));
-    const lo = Math.max(1, Math.round(implied / fitted.intervalFactor));
-    const hi = Math.round(implied * fitted.intervalFactor);
-    return { p, age, multiple, clamped, logTvl, logCatmed, cat, implied, lo, hi, odds: launchOdds(p, snapshot, odds, model) };
+    // The 90% range is priced per TVL band from the honest held-out
+    // residuals: small protocols are noisier than large ones, so one global
+    // factor overstates the range on the big rows and understates it on the
+    // small ones. The implied value itself is untouched.
+    const bandDef = bandForTvl(p.tvl_usd);
+    const band = fitted.intervalBands.find((b) => b.band === bandDef.band) ?? { band: bandDef.band, n: 0, factor: fitted.intervalFactorHonest, fallback: true };
+    const lo = Math.max(1, Math.round(implied / band.factor));
+    const hi = Math.round(implied * band.factor);
+    return { p, age, multiple, clamped, logTvl, logCatmed, cat, implied, lo, hi, band, bandFactor: band.factor, odds: launchOdds(p, snapshot, odds, model) };
   });
   scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
   const impliedMedian = median(scored.map((s) => s.implied));
@@ -824,6 +1040,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       launch_odds: Math.round(s.odds * 1000) / 1000,
       farm_verdict: verdict,
       farm_cost_usd: farmCostUsd(s.p),
+      farm_cost_per_hour_usd: farmCostPerHourUsd(s.p, s.age),
       model: {
         fitted_multiple: round6(s.multiple),
         log_tvl: round4(s.logTvl),
@@ -835,6 +1052,8 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
         clamped: s.clamped,
         age_days: s.age,
         growth_pct: round4(Math.min(120, Math.max(-60, finite(s.p.change_7d, 0)))),
+        interval_band: s.band.band,
+        interval_factor: round4(s.bandFactor),
       },
       farm_steps: farmSteps(s.p, s.age).map(stepText),
     };
@@ -878,6 +1097,7 @@ export function radarRow(row: BoardRow, snapshot: Snapshot): RadarRow {
     launch_odds: row.launch_odds,
     farm_verdict: row.farm_verdict,
     farm_cost_usd: row.farm_cost_usd,
+    farm_cost_per_hour_usd: row.farm_cost_per_hour_usd,
     watchlist: snapshot.watchlist.includes(row.slug),
     model: row.model,
     farm_steps: row.farm_steps,
@@ -911,12 +1131,26 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     loo_multiple: fitted.looMultiple,
     loo_n: fitted.looN,
     loo_typical_multiple: fitted.looTypicalMultiple,
+    loo_mae_multiple: fitted.looMaeMultiple,
+    walk_forward_mae_multiple: fitted.walkForwardMaeMultiple,
+    walk_forward_reverse_mae_multiple: fitted.walkForwardReverseMaeMultiple,
     walk_forward_multiple: fitted.walkForwardMultiple,
     walk_forward_n: fitted.walkForwardN,
     walk_forward_typical_multiple: fitted.walkForwardTypicalMultiple,
     walk_forward_reverse_multiple: fitted.walkForwardReverseMultiple,
     walk_forward_reverse_typical_multiple: fitted.walkForwardReverseTypicalMultiple,
     interval_factor: fitted.intervalFactor,
+    honest_loo_multiple: fitted.honestLooMultiple,
+    honest_loo_mae_multiple: fitted.honestLooMaeMultiple,
+    honest_loo_typical_multiple: fitted.honestLooTypicalMultiple,
+    honest_walk_forward_multiple: fitted.honestWalkForwardMultiple,
+    honest_walk_forward_mae_multiple: fitted.honestWalkForwardMaeMultiple,
+    honest_walk_forward_typical_multiple: fitted.honestWalkForwardTypicalMultiple,
+    honest_walk_forward_reverse_multiple: fitted.honestWalkForwardReverseMultiple,
+    honest_walk_forward_reverse_mae_multiple: fitted.honestWalkForwardReverseMaeMultiple,
+    honest_walk_forward_reverse_typical_multiple: fitted.honestWalkForwardReverseTypicalMultiple,
+    interval_factor_honest: fitted.intervalFactorHonest,
+    interval_bands: fitted.intervalBands,
     clamp_lo: fitted.clampLo,
     clamp_hi: fitted.clampHi,
     median_age_days: odds.medianPreAge,
@@ -937,6 +1171,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     `all ${snapshot.protocols.length} snapshot protocols accounted for: ${board.length} ranked, ${live.length} live, ${excluded.cex + excluded.versioned + excluded.wrapped + excluded.chainBridge} set aside with reasons`,
     `value comps exclude exchanges and bridges (${compsList(snapshot).length} of ${liveTokenWithMcap} live-token protocols set the multiples): their market-cap / TVL ratios measure a different business`,
     `no protocol name is special-cased; every multiple, coefficient and odds figure is fitted from this snapshot`,
+    `90% range on each row uses its TVL band's factor, priced from honest held-out residuals (category table rebuilt inside every fold)`,
   ];
   const radar: RadarData = {
     as_of: snapshot.as_of,

@@ -23,16 +23,32 @@ implied = round( TVL x 10^log10(mcap / TVL) ), clamped to x0.0080 – x5.1301
 The category median is the median market-cap / TVL of that category's
 live-token protocols, shrunk toward the global median (x0.2042 on this
 snapshot) by weight n / (n + 2), so a category with one comp cannot set the
-board. Held-out validation, computed at runtime from this snapshot:
-leave-one-out error **x5.5765** (RMSE 0.7464 in log10, 101 comps),
-walk-forward error **x5.2189** (fit on the older listings, scored on the 38
-newer ones), reverse walk-forward x4.5683. The typical held-out error — the
-median absolute error, the error a coin-flip protocol actually sees — is
-x2.5722 leave-one-out and x2.1895 walk-forward: the RMSE multiples above are
-pulled up by a few protocols whose multiples sit orders of magnitude off
-their peers. The 90% interval on each implied value is x17.1784, the 90th
-percentile of the leave-one-out residuals — honestly wide, because market
-multiples span four orders of magnitude.
+board. Held-out validation, computed at runtime from this snapshot, is
+reported two ways — as-fitted and honest. As-fitted builds the category
+table once on all 101 comps, so a held-out protocol's own ratio leaks into
+its prediction: leave-one-out error **x5.5765** (RMSE 0.7464 in log10),
+walk-forward **x5.2189**, reverse walk-forward x4.5683; mean-absolute-error
+multiples x3.6281 / x3.4131 / x2.8765 and median multiples x2.5722 / x2.1895 /
+x2.0099. Honest rebuilds the table inside every fold and every split, so
+nothing leaks: leave-one-out **x8.3275** (MAE x5.2019, median x3.9303),
+walk-forward **x9.1681** (MAE x5.2663, median x2.9988), reverse walk-forward
+x6.5968 (MAE x4.7563, median x4.4921). The RMSE multiples are pulled up by a
+few protocols whose multiples sit orders of magnitude off their peers; the
+median says what the model usually gets wrong. The 90% interval on each
+implied value is priced per TVL band from the honest leave-one-out residuals:
+<$100M x42.9243 (80 comps), $100M–$2B x14.3490 (17 comps), >$2B falls back to
+the honest global factor x29.6095 (4 comps — too few to price alone). The old
+single factor was x17.1784 as-fitted. Farm plans now also show cost per
+active hour beside the total cost.
+
+v5 changes nothing about the model — the same fitted coefficients, the same
+board, the same verdicts. It only shows the validation honestly (as-fitted
+beside honest, RMSE beside MAE beside median), prices the interval per TVL
+band, and costs the farm plan per hour. A research pass over the snapshot
+found no honestly better model: every direction tried (retargeting,
+k-nearest neighbours, robust fits, extra features, tree models) landed
+within noise of v4, and the ~x2–3 held-out errors in the leaders' titles
+match median/MAE statistics on a leaky evaluation, not honest RMSE.
 
 Term selection by leave-one-out error (full model x5.8998): **log_tvl kept**
 (without it x6.2076) and **log_catmed kept** (without it x8.0821); **growth
