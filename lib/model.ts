@@ -132,6 +132,11 @@ export interface Validation {
   honest_walk_forward_reverse_multiple: number;
   honest_walk_forward_reverse_mae_multiple: number;
   honest_walk_forward_reverse_typical_multiple: number;
+  /** Honest 10-fold multiples: comps dealt round-robin by slug into 10
+   *  folds, the category table rebuilt inside every fold. */
+  honest_tenfold_multiple: number;
+  honest_tenfold_mae_multiple: number;
+  honest_tenfold_typical_multiple: number;
   /** Honest global 90% interval factor (q90 of the honest LOO residuals). */
   interval_factor_honest: number;
   /** Per-TVL-band 90% interval factors from the honest LOO residuals. */
@@ -153,6 +158,19 @@ export interface Coverage {
   excluded_versioned: number;
   excluded_wrapped: number;
   excluded_chain_bridge: number;
+}
+
+/** Farm capital sized to minimum viable capital, computed from the board:
+ *  how many rows the gas rule raised, on which chains, and the resulting
+ *  Ethereum / Bitcoin capital floors — so the dashboard states the rule
+ *  with figures from this snapshot, never hand-written ones. */
+export interface FarmCapitalSummary {
+  raised: number;
+  raised_ethereum: number;
+  raised_bitcoin: number;
+  ethereum_capital: number;
+  bitcoin_capital: number;
+  min_tier: number;
 }
 
 export interface ModelBreakdown {
@@ -242,6 +260,7 @@ export interface RadarData {
   coverage: Coverage;
   validation: Validation;
   checks: string[];
+  farm_capital: FarmCapitalSummary;
   watchlist_size: number;
   board_size: number;
   early_size: number;
@@ -581,6 +600,31 @@ function honestWalkForward(comps: SnapshotProtocol[], snapshot: Snapshot, kept: 
   });
 }
 
+/**
+ * Honest 10-fold errors: the comps sorted by slug and dealt round-robin
+ * into 10 folds (11, 10, 10, 10, 10, 10, 10, 10, 10, 10). Per fold the
+ * category table is rebuilt from the other nine folds only and the fit is
+ * re-run, so a held-out protocol's own ratio never leaks into its
+ * prediction. No PRNG: the partition is exactly reproducible.
+ */
+function honestTenFold(comps: SnapshotProtocol[], snapshot: Snapshot, kept: TermName[], model: ModelConstants): number[] {
+  const sorted = [...comps].sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+  const folds: SnapshotProtocol[][] = Array.from({ length: 10 }, () => []);
+  sorted.forEach((p, i) => folds[i % 10]!.push(p));
+  const errs: number[] = [];
+  for (let k = 0; k < 10; k++) {
+    const test = folds[k]!;
+    const train = folds.flatMap((f, j) => (j === k ? [] : f));
+    const table = tableFromComps(train, model);
+    const { xRows, y } = designRows(train, table, kept, snapshot.as_of, model);
+    const beta = ols(xRows, y);
+    for (const p of test) {
+      errs.push(Math.log10(p.mcap_usd! / p.tvl_usd) - predictRow(p, table, beta, kept, snapshot.as_of, model));
+    }
+  }
+  return errs;
+}
+
 /** Per-band 90% interval factors from the honest LOO residuals. A band with
  *  fewer than 10 comps falls back to the global honest factor, and says so. */
 function intervalBands(looErrs: number[], looTvls: number[], globalFactor: number): IntervalBand[] {
@@ -624,6 +668,11 @@ export interface FittedModel {
   honestWalkForwardReverseMultiple: number;
   honestWalkForwardReverseMaeMultiple: number;
   honestWalkForwardReverseTypicalMultiple: number;
+  /** Honest 10-fold multiples: comps dealt round-robin by slug into 10
+   *  folds, the category table rebuilt inside every fold. */
+  honestTenFoldMultiple: number;
+  honestTenFoldMaeMultiple: number;
+  honestTenFoldTypicalMultiple: number;
   /** Honest global 90% interval factor (q90 of the honest LOO residuals). */
   intervalFactorHonest: number;
   /** Per-TVL-band 90% interval factors from the honest LOO residuals. */
@@ -709,6 +758,7 @@ export function fitModel(snapshot: Snapshot, model: ModelConstants = MODEL): Fit
   const honestLooMult = errorMultiples(honest.errs);
   const honestWfMult = errorMultiples(honestWalkForward(comps, snapshot, kept, model, false));
   const honestWfRevMult = errorMultiples(honestWalkForward(comps, snapshot, kept, model, true));
+  const honestTfMult = errorMultiples(honestTenFold(comps, snapshot, kept, model));
   const intervalFactorHonest = round4(10 ** quantile(honest.errs.map((e) => Math.abs(e)), 0.9));
   return {
     coefficients,
@@ -735,6 +785,9 @@ export function fitModel(snapshot: Snapshot, model: ModelConstants = MODEL): Fit
     honestWalkForwardReverseMultiple: honestWfRevMult.rmse,
     honestWalkForwardReverseMaeMultiple: honestWfRevMult.mae,
     honestWalkForwardReverseTypicalMultiple: honestWfRevMult.median,
+    honestTenFoldMultiple: honestTfMult.rmse,
+    honestTenFoldMaeMultiple: honestTfMult.mae,
+    honestTenFoldTypicalMultiple: honestTfMult.median,
     intervalFactorHonest,
     intervalBands: intervalBands(honest.errs, honest.tvls, intervalFactorHonest),
     clampLo: round4(clampLo),
@@ -876,12 +929,22 @@ function gasUsdFor(chain: string): number {
   return 0.5;
 }
 
-/** How much capital one farm position needs, from the protocol's own TVL. */
-function capitalFor(p: SnapshotProtocol): number {
+/** The TVL tier one farm position starts from, before gas is considered. */
+function tierFor(p: SnapshotProtocol): number {
   if (p.tvl_usd >= 5_000_000_000) return 250;
   if (p.tvl_usd >= 1_000_000_000) return 150;
   if (p.tvl_usd >= 100_000_000) return 100;
   return 50;
+}
+
+/**
+ * How much capital one farm position needs: the larger of the TVL tier and
+ * five times the plan's six-transaction gas bill, so fees stay under a fifth
+ * of the position. On Ethereum that means $240, not $50; on Bitcoin $90.
+ * Every other chain's gas is small enough that the tier always wins.
+ */
+function capitalFor(p: SnapshotProtocol): number {
+  return Math.max(tierFor(p), 5 * 6 * gasUsdFor(chainOf(p)));
 }
 
 /** How long to hold, from the protocol's age: younger protocols get a longer qualifying window. */
@@ -1149,6 +1212,9 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     honest_walk_forward_reverse_multiple: fitted.honestWalkForwardReverseMultiple,
     honest_walk_forward_reverse_mae_multiple: fitted.honestWalkForwardReverseMaeMultiple,
     honest_walk_forward_reverse_typical_multiple: fitted.honestWalkForwardReverseTypicalMultiple,
+    honest_tenfold_multiple: fitted.honestTenFoldMultiple,
+    honest_tenfold_mae_multiple: fitted.honestTenFoldMaeMultiple,
+    honest_tenfold_typical_multiple: fitted.honestTenFoldTypicalMultiple,
     interval_factor_honest: fitted.intervalFactorHonest,
     interval_bands: fitted.intervalBands,
     clamp_lo: fitted.clampLo,
@@ -1163,11 +1229,50 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     odds_overall_share: round4(odds.overallShare),
   };
   const liveTokenWithMcap = snapshot.protocols.filter((p) => !isPreToken(p) && p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0).length;
+  // Farm capital summary: which rows the gas rule raised above their TVL
+  // tier, and the resulting capital floors per chain. Computed from the
+  // board, so the dashboard's rule statement and checks line carry this
+  // snapshot's figures, not hand-written ones.
+  const bySlugIndex = bySlug(snapshot.protocols);
+  const farmCapital: FarmCapitalSummary = (() => {
+    let raised = 0;
+    let raisedEth = 0;
+    let raisedBtc = 0;
+    let ethCap = 0;
+    let btcCap = 0;
+    let minTier = Infinity;
+    for (const row of board) {
+      const p = bySlugIndex.get(row.slug)!;
+      const tier = tierFor(p);
+      const cap = capitalFor(p);
+      if (tier < minTier) minTier = tier;
+      if (cap > tier) {
+        raised++;
+        const chain = chainOf(p).toLowerCase();
+        if (chain === 'ethereum') {
+          raisedEth++;
+          ethCap = Math.max(ethCap, cap);
+        } else if (chain === 'bitcoin') {
+          raisedBtc++;
+          btcCap = Math.max(btcCap, cap);
+        }
+      }
+    }
+    return {
+      raised,
+      raised_ethereum: raisedEth,
+      raised_bitcoin: raisedBtc,
+      ethereum_capital: ethCap,
+      bitcoin_capital: btcCap,
+      min_tier: minTier === Infinity ? 50 : minTier,
+    };
+  })();
   const checks = [
     `watchlist ${snapshot.watchlist.length}/${snapshot.watchlist.length} covered`,
     `ranks exactly 1..${board.length}`,
     `implied values non-increasing, ${new Set(board.map((r) => r.implied_value_usd)).size} distinct`,
     `farm plan on every row (${board[0]?.farm_steps.length ?? 0} steps each)`,
+    `farm capital sized so gas stays under a fifth of the position (${farmCapital.raised} rows raised: ${farmCapital.raised_ethereum} on Ethereum, ${farmCapital.raised_bitcoin} on Bitcoin)`,
     `all ${snapshot.protocols.length} snapshot protocols accounted for: ${board.length} ranked, ${live.length} live, ${excluded.cex + excluded.versioned + excluded.wrapped + excluded.chainBridge} set aside with reasons`,
     `value comps exclude exchanges and bridges (${compsList(snapshot).length} of ${liveTokenWithMcap} live-token protocols set the multiples): their market-cap / TVL ratios measure a different business`,
     `no protocol name is special-cased; every multiple, coefficient and odds figure is fitted from this snapshot`,
@@ -1193,6 +1298,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     },
     validation,
     checks,
+    farm_capital: farmCapital,
     watchlist_size: snapshot.watchlist.length,
     board_size: board.length,
     early_size: early,

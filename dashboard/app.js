@@ -401,10 +401,11 @@
     [
       ['Leave-one-out', v.loo_multiple, v.loo_mae_multiple, v.loo_typical_multiple, v.honest_loo_multiple, v.honest_loo_mae_multiple, v.honest_loo_typical_multiple],
       ['Walk-forward', v.walk_forward_multiple, v.walk_forward_mae_multiple, v.walk_forward_typical_multiple, v.honest_walk_forward_multiple, v.honest_walk_forward_mae_multiple, v.honest_walk_forward_typical_multiple],
-      ['Reverse walk-forward', v.walk_forward_reverse_multiple, v.walk_forward_reverse_mae_multiple, v.walk_forward_reverse_typical_multiple, v.honest_walk_forward_reverse_multiple, v.honest_walk_forward_reverse_mae_multiple, v.honest_walk_forward_reverse_typical_multiple]
+      ['Reverse walk-forward', v.walk_forward_reverse_multiple, v.walk_forward_reverse_mae_multiple, v.walk_forward_reverse_typical_multiple, v.honest_walk_forward_reverse_multiple, v.honest_walk_forward_reverse_mae_multiple, v.honest_walk_forward_reverse_typical_multiple],
+      ['10-fold (round-robin by slug), honest', null, null, null, v.honest_tenfold_multiple, v.honest_tenfold_mae_multiple, v.honest_tenfold_typical_multiple]
     ].forEach(function (r) {
       var cells = [el('td', { text: r[0] })];
-      for (var i = 1; i < r.length; i++) cells.push(el('td', { class: 'num', text: 'x' + r[i] }));
+      for (var i = 1; i < r.length; i++) cells.push(el('td', { class: 'num', text: (r[i] === null || r[i] === undefined) ? '—' : 'x' + r[i] }));
       vBody.appendChild(el('tr', null, cells));
     });
     mp.appendChild(el('div', { class: 'compstable' }, el('table', null,
@@ -415,6 +416,7 @@
       ),
       vBody
     )));
+    mp.appendChild(el('p', { text: 'The 10-fold line deals the ' + v.loo_n + ' comps round-robin by slug into 10 folds (11, 10, 10, 10, 10, 10, 10, 10, 10, 10); each fold refits with the category table rebuilt from the other nine folds, so it is honest the same way the leave-one-out and walk-forward numbers are. There is no as-fitted 10-fold column because the test is only meaningful with the table rebuilt per fold.' }));
     mp.appendChild(el('p', { text: 'The 90% interval on each implied value is priced per TVL band from the honest leave-one-out residuals: ' + v.interval_bands.map(function (b) { return b.band + ' x' + b.factor + ' (' + b.n + ' comps' + (b.fallback ? ', global fallback' : '') + ')'; }).join(', ') + '. The old single factor was x' + v.interval_factor + ' as-fitted (x' + v.interval_factor_honest + ' honest); one factor overstates the range on the big rows and understates it on the small ones, because market multiples span four orders of magnitude and small protocols are noisier.' }));
     mp.appendChild(el('p', { text: 'The comps leave out exchanges and bridges: an exchange\u2019s token prices its whole exchange business, not the TVL on its DeFi product, and a bridge\u2019s TVL is assets in transit, not value captured. Their market-cap / TVL ratios run from 0.00025x to 69x — nearly six orders of magnitude — so they would set the board\u2019s prices from businesses the board does not rank. The ' + v.comps_n + ' comps are the live-token protocols outside those four categories; the rule is over categories, never names, and pre-token bridges are still ranked, on the global median.' }));
     mp.appendChild(el('p', { text: 'The category median behind each row is shrunk toward the global median x' + fmtMult(DATA.global_median) + ' by weight n / (n + ' + m.shrinkage_k + '), so a category with one comp cannot set the board. No protocol name is special-cased, and no row is hand-picked.' }));
@@ -510,6 +512,7 @@
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Farm plan — six steps, with cost and time' }),
+      DATA.farm_capital ? el('p', { class: 'sub', text: 'Capital is the larger of the TVL tier and five times the plan\u2019s six-transaction gas, so fees stay under a fifth of the position — on Ethereum that means $' + DATA.farm_capital.ethereum_capital + ', not $' + DATA.farm_capital.min_tier + '; on Bitcoin $' + DATA.farm_capital.bitcoin_capital + '.' }) : null,
       el('ol', { class: 'steps' }, row.farm_steps.map(function (s) {
         var at = s.indexOf(' Cost: ');
         var action = at >= 0 ? s.slice(0, at) : s;
